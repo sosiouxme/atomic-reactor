@@ -26,12 +26,6 @@ def make_nonblocking(stream):
     fcntl(stream, F_SETFL, flags | os.O_NONBLOCK)
 
 
-def nonblocking_readline(stream):
-    try:
-        data = stream.readline()
-        return data.decode() if PY2 else data
-    except IOError:  # when there's no data to read at this time
-        return ''
 
 
 class ImagebuilderPlugin(BuildStepPlugin):
@@ -54,39 +48,27 @@ class ImagebuilderPlugin(BuildStepPlugin):
 
         image = builder.image.to_str()
         # TODO: directly invoke go imagebuilder library in shared object via python module
-        kwargs = dict(stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-        # TODO: buffering = 1?
+        kwargs = dict(stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
         if not PY2:
             kwargs['encoding'] = 'utf-8'
         ib_process = subprocess.Popen(['imagebuilder', '-t', image, builder.df_dir], **kwargs)
-        make_nonblocking(ib_process.stdout)
-        make_nonblocking(ib_process.stderr)
 
         self.log.debug('imagebuilder build has begun; waiting for it to finish')
-        (output, last_error) = ([], None)
+        output = []
         while True:
             poll = ib_process.poll()
-            # NOTE: imagebuilder writes both stdout and stderr in normal operation.
-            # Because the two streams are not always logged in the same order as they're
-            # produced, prefix logs with stderr/stdout to distinguish the streams.
-            out = nonblocking_readline(ib_process.stdout)
+            out = ib_process.stdout.readline()
+            out = out.decode() if PY2 else out
             if out:
-                self.log.info('stdout: %s', out.rstrip())
+                self.log.info('%s', out.rstrip())
                 output.append(out)
-            err = nonblocking_readline(ib_process.stderr)
-            if err:
-                self.log.info('stderr: %s', err.rstrip())
-                output.append(err)  # include stderr with stdout
-                last_error = err    # while noting the final line
-            if out == '' and err == '':
-                if poll is not None:
-                    break
-                time.sleep(0.1)  # don't busy-wait when there's no output
+            if out == '' and poll is not None:
+                break
 
         if ib_process.returncode != 0:
-            # imagebuilder uses stderr for normal output too; so in the case of an apparent
-            # failure, single out the last line to include in the failure summary.
-            err = last_error or "<imagebuilder had bad exit code but no error output>"
+            # in the case of an apparent failure, single out the last line to
+            # include in the failure summary.
+            err = output[-1] if output else "<imagebuilder had bad exit code but no output>"
             return BuildResult(
                 logs=output,
                 fail_reason="image build failed (rc={}): {}".format(ib_process.returncode, err),

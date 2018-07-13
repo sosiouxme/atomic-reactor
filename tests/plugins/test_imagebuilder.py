@@ -10,7 +10,6 @@ from __future__ import unicode_literals
 
 import subprocess
 import time
-import tempfile
 from dockerfile_parse import DockerfileParser
 
 from atomic_reactor.plugin import PluginFailedException
@@ -80,12 +79,6 @@ class MockInsideBuilder(object):
         pass
 
 
-def content_stream(tmpdir, contents):
-    stream = tempfile.TemporaryFile(mode='w+', bufsize=1, dir=str(tmpdir))
-    stream.write(contents)
-    return stream
-
-
 @pytest.mark.parametrize('image_id', ['sha256:12345', '12345'])
 def test_popen_cmd(image_id):
     """
@@ -111,12 +104,11 @@ def test_popen_cmd(image_id):
     assert cmd_output in workflow.build_result.logs
 
 
-def test_failed_build(tmpdir):
+def test_failed_build():
     cmd_output = "spam spam spam spam spam spam spam baked beans spam spam spam and spam\n"
-    cmd_error = "Nobody expects the Spanish Inquisition!"
+    cmd_error = "Nobody expects the Spanish Inquisition!\n"
     ib_process = flexmock(
-        stdout=content_stream(tmpdir, cmd_output),
-        stderr=content_stream(tmpdir, cmd_error),
+        stdout=StringIO(cmd_output + cmd_error),
         poll=lambda: True,
         returncode=1,
     )
@@ -136,21 +128,3 @@ def test_failed_build(tmpdir):
     assert cmd_error in workflow.build_result.fail_reason
     assert workflow.build_result.skip_layer_squash is False
 
-
-def test_sleep_await_output(tmpdir):
-    ib_process = flexmock(
-        stdout=content_stream(tmpdir, ""),
-        stderr=content_stream(tmpdir, ""),
-        poll=lambda: None,
-        returncode=1,
-    )
-    flexmock(subprocess).should_receive('Popen').and_return(ib_process)
-    workflow = DockerBuildWorkflow(MOCK_SOURCE, 'test-image')
-    workflow.builder = MockInsideBuilder(image_id='abcde')
-
-    class Spam(Exception):
-        pass
-
-    flexmock(time).should_receive('sleep').with_args(0.1).and_raise(Spam)
-    with pytest.raises(Spam):
-        ImagebuilderPlugin(None, workflow).run()
