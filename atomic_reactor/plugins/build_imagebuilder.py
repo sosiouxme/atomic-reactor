@@ -57,11 +57,14 @@ class ImagebuilderPlugin(BuildStepPlugin):
         output = []
         while True:
             poll = ib_process.poll()
+            self.log.debug('poll is %s', poll)
             out = ib_process.stdout.readline()
             out = out.decode() if PY2 else out
             if out:
                 self.log.info('%s', out.rstrip())
                 output.append(out)
+            else:
+                self.log.debug('out is %s', out)
             if out == '' and poll is not None:
                 break
 
