@@ -59,7 +59,7 @@ class ImagebuilderPlugin(BuildStepPlugin):
             poll = ib_process.poll()
             self.log.debug('poll is %s', poll)
             out = ib_process.stdout.readline()
-            out = out.decode() if PY2 else out
+            out = out.decode('utf-8') if PY2 else out
             if out:
                 self.log.info('%s', out.rstrip())
                 output.append(out)
