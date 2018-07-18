@@ -31,38 +31,38 @@ class ImagebuilderPlugin(BuildStepPlugin):
         Build image inside current environment using imagebuilder;
         It's expected this may run within (privileged) docker container.
 
+        TODO: directly invoke go imagebuilder library in shared object via python module
+              instead of running via subprocess.
+
         Returns:
             BuildResult
         """
         builder = self.workflow.builder
-
         image = builder.image.to_str()
-        # TODO: directly invoke go imagebuilder library in shared object via python module
-        kwargs = dict(stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
+
+        # set up subprocess params
+        kwargs = dict(stderr=subprocess.STDOUT)
         encoding_params = dict(encoding='utf-8', errors='replace')
         if not PY2:
             kwargs.update(encoding_params)
-        ib_process = subprocess.Popen(['imagebuilder', '-t', image, builder.df_dir], **kwargs)
 
-        self.log.debug('imagebuilder build has begun; waiting for it to finish')
-        output = []
-        while True:
-            poll = ib_process.poll()
-            out = ib_process.stdout.readline()
-            out = out.decode(**encoding_params) if PY2 else out
-            if out:
-                self.log.info('%s', out.rstrip())
-                output.append(out)
-            elif poll is not None:
-                break
+        rc = 0
+        try:
+            out = subprocess.check_output(['imagebuilder', '-t', image, builder.df_dir], **kwargs)
+        except subprocess.CalledProcessError as exc:
+            out, rc = (exc.output, exc.returncode)
 
-        if ib_process.returncode != 0:
-            # in the case of an apparent failure, single out the last line to
-            # include in the failure summary.
-            err = output[-1] if output else "<imagebuilder had bad exit code but no output>"
+        out = out.decode(**encoding_params) if PY2 else out
+        self.log.info('output from imagebuilder:\n%s', out)
+
+        out_lines = out.splitlines(True)
+        if rc != 0:
+            # assume the last line holds an error msg; include it in the failure summary.
+            err = out_lines[-1] if out_lines else "<imagebuilder had bad exit code but no output>"
+            self.log.error("image build failed with rc=%d", rc)
             return BuildResult(
-                logs=output,
-                fail_reason="image build failed (rc={}): {}".format(ib_process.returncode, err),
+                logs=out_lines,
+                fail_reason="image build failed (rc={}): {}".format(rc, err),
             )
 
         image_id = builder.get_built_image_info()['Id']
@@ -71,11 +71,11 @@ class ImagebuilderPlugin(BuildStepPlugin):
             image_id = 'sha256:{}'.format(image_id)
 
         # since we need no squash, export the image for local operations like squash would have
-        self.log.info("fetching image %s from docker", image)
+        self.log.info("build succeeded. fetching image %s from docker", image)
         output_path = os.path.join(self.workflow.source.workdir, EXPORTED_SQUASHED_IMAGE_NAME)
         with open(output_path, "w") as image_file:
             image_file.write(self.tasker.d.get_image(image).data)
         img_metadata = get_exported_image_metadata(output_path, IMAGE_TYPE_DOCKER_ARCHIVE)
         self.workflow.exported_image_sequence.append(img_metadata)
 
-        return BuildResult(logs=output, image_id=image_id, skip_layer_squash=True)
+        return BuildResult(logs=out_lines, image_id=image_id, skip_layer_squash=True)
